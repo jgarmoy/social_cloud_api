@@ -1,0 +1,21 @@
+### Generar perfil con Gemini ✅
+POST http://localhost:8000/social_cloud/api/v1/perfiles/
+Content-Type: application/json
+
+{
+  "semana_snapshot": "2025-01-06",
+  "perfiles_excluidos": ["P00002", "E0002", "E0003"]
+}
+
+### Generar audiencia demográfica con Gemini ✅
+POST http://localhost:8000/social_cloud/api/v1/audiencia/
+Content-Type: application/json
+
+{
+  "semana_snapshot": "2025-01-05",
+  "perfil_id": "P00002",
+  "empresa_id": "E0002",
+  "username": "@miriamfuertes",
+  "plataforma": "Instagram",
+  "seguidores": 15500
+}
