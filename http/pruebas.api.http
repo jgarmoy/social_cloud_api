@@ -1,5 +1,5 @@
 ### Generar perfil con Gemini ✅
-POST http://localhost:8000/social_cloud/api/v1/perfiles/
+POST https://social-cloud-api.onrender.com/social_cloud/api/v1/perfiles
 Content-Type: application/json
 
 {
@@ -30,4 +30,13 @@ Content-Type: application/json
   "empresa_id": "E0077",
   "username": "@nadiapardo",
   "plataforma": "TikTok"
+}
+
+# Probar API en Render 
+POST https://social-cloud-api.onrender.com/social_cloud/api/v1/perfiles/
+Content-Type: application/json
+
+{
+  "semana_snapshot": "2025-01-06",
+  "perfiles_excluidos": []
 }
