@@ -9,6 +9,8 @@ import random
 import pandas as pd
 import numpy as np
 import re
+import uuid
+import hashlib
 
 # Create your views here.
 def audiencia_gemini(request):
@@ -23,9 +25,9 @@ def audiencia_gemini(request):
         seguidores = cuerpo.get("seguidores")
 
         p = str(plataforma_raw).lower().strip()
-        if any(x in p for x in ["instagram", "insta", "ig"]):
+        if any(x in p for x in ["insta", "ig"]):
             plat_cannon = "Instagram"
-        elif any(x in p for x in ["TikTok", "tik", "tk"]):
+        elif any(x in p for x in ["tik", "tk"]):
             plat_cannon = "TikTok"
         else:
             plat_cannon = "YouTube"
@@ -83,17 +85,26 @@ def audiencia_gemini(request):
 
         ultimo_snapshot = df_perfil[df_perfil['UPDATED_AT'].isna()]
 
+        # Añadir justo antes de llamar a Gemini
+        hora   = random.randint(1, 6)
+        minuto = random.randint(0, 59)
+        segundo = random.randint(0, 59)
+        created_at_nuevo = f"{semana_snapshot} {hora:02d}:{minuto:02d}:{segundo:02d}.000"
+
         client = conectar_gemini()
 
         respuesta = client.models.generate_content(
-            model="gemini-3-flash-preview",
+            model = "gemini-3-flash-preview",
             config=types.GenerateContentConfig(
-                system_instruction="Eres un analista de datos experto en redes sociales. Genera datos demográficos coherentes y realistas. Devuelve estrictamente un objeto JSON con la estructura indicada",
+                system_instruction = """
+                    Eres un analista de datos experto en redes sociales. Genera datos demográficos coherentes y realistas. Devuelve estrictamente un objeto JSON con la estructura indicada
+                """,
                 response_mime_type = "application/json"
             ),
-            contents=construir_prompt({
+            contents = construir_prompt({
                 "num_prompt": 1,
                 "snapshot_date": semana_snapshot,
+                "created_at": created_at_nuevo,
                 "perfil_id": perfil_id,
                 "empresa_id": empresa_id,
                 "username": username,
@@ -110,7 +121,6 @@ def audiencia_gemini(request):
                 texto_limpio = match.group(0)
                 datos = json.loads(texto_limpio)
             else:
-                # Si no hay llaves, algo salió muy mal con la IA
                 datos = {"records": []}
                 
         except json.JSONDecodeError as e:
@@ -129,7 +139,8 @@ def audiencia_gemini(request):
         return JsonResponse({
             "records": nuevos_registros,
             "filas_anteriores": filas_anteriores,
-            "snapshot_date": semana_snapshot
+            "snapshot_date": semana_snapshot,
+            "created_at_nuevo": created_at_nuevo
         })
 
 def perfiles_gemini(request):
@@ -148,6 +159,9 @@ def perfiles_gemini(request):
 
         candidatos = df_disponibles[(df_disponibles["ACTIVO"] == True) & (df_disponibles["UPDATED_AT"].isna())]
 
+        if candidatos.empty:
+            return JsonResponse({"error": "No quedan perfiles activos sin procesar"}, status=400)
+
         perfil_elegido = candidatos.sample(n=1).iloc[0]
 
         seguidores_actuales = int(perfil_elegido['SEGUIDORES'])
@@ -156,19 +170,15 @@ def perfiles_gemini(request):
         alcance_min         = int(seguidores_max * 0.05)
         alcance_max         = int(seguidores_max * 0.40)
 
-        print(perfil_elegido)
-
         client = conectar_gemini()
 
         respuesta = client.models.generate_content(
             model="gemini-3-flash-preview",
             config=types.GenerateContentConfig(
-                system_instruction=(
-                    """
-                        Eres un analista de datos experto. Tu tarea es generar métricas de redes sociales coherentes y realistas basadas en el perfil de empresa proporcionado. 
-                        Debes devolver estrictamente un objeto JSON que siga la estructura exacta de columnas del dataset.
-                    """
-                ),
+                system_instruction="""
+                    Eres un analista de datos experto en redes sociales. Genera datos demográficos coherentes y realistas. Devuelve estrictamente un objeto JSON con la estructura indicada.
+                """
+                ,
                 response_mime_type="application/json"
             ),
             contents=construir_prompt({
@@ -206,8 +216,7 @@ def perfiles_gemini(request):
                 "plataforma": str(perfil_elegido['PLATAFORMA']),
                 "seguidores": int(datos.get('SEGUIDORES')),
                 "fila_anterior": {
-                    col: (None if pd.isna(perfil_elegido[col]) or str(perfil_elegido[col]) == "nan" 
-                        else perfil_elegido[col])
+                    col: convertir_valor(perfil_elegido[col])
                     for col in perfil_elegido.index
                 }
             }
@@ -215,26 +224,99 @@ def perfiles_gemini(request):
     
 
 def post_gemini(request):
-    client = conectar_gemini()
+    
+    if request.method == "POST":
+        cuerpo = json.loads(request.body)
+        fecha_publicacion = cuerpo.get("fecha_publicacion")
+        perfil_id = cuerpo.get("perfil_id")
+        empresa_id = cuerpo.get("empresa_id")
+        username = cuerpo.get("username")
+        plataforma = cuerpo.get("plataforma")
 
-    response = client.models.generate_content(
-        model="gemini-3-flash-preview",
-        config=types.GenerateContentConfig(
-            system_instruction="Eres un asistente que responde a las preguntas de los usuarios de manera clara y consisa. Devuelve solamente  un json con la respuesta a la pregunta del usuario"
-        ),
-        contents=construir_prompt({
-            "num_prompt": 3,
-            "semana_snapshot": ""
-        })
-    )
-    json_response = json.loads(response.text)
+        ultimo_post_id = cuerpo.get("ultimo_post_id", "P103861")
+        num_max_post   = int(ultimo_post_id[1:])
+        next_post_num  = f"P{num_max_post + 1:06d}" # Rellena con ceros a la izquierda hasta 6 dígitos
+        raw_json = str(uuid.uuid4())
 
-    return JsonResponse(json_response)
+        es_viral = random.random() < 0.01
+        if es_viral:
+            likes_min = 500000
+            likes_max = 2000000
+        else:
+            likes_min = 10
+            likes_max = 35000
+
+        es_error_tracking = random.random() < 0.03
+        if es_error_tracking:
+            visualizaciones = 0
+            alcance = random.randint(500, 120000)
+            impresiones = 0
+        else:
+            alcance = random.randint(500, 120000)
+            visualizaciones = int(alcance * random.uniform(0.8, 1.0))
+            impresiones = int(alcance * random.uniform(1.2, 3.5))
+
+        tipo_contenido = random.choices(
+            ['Reel', 'Story', 'Post estático', 'Carrusel', 'Vídeo'],
+            weights = [0.42, 0.24, 0.15, 0.12, 0.08]
+        )[0]
+
+        source_api = random.choices(
+            ['api_v1', 'api_v2', 'manual_export'],
+            weights = [0.40, 0.35, 0.25]
+        )[0]
+
+        patrocinado = random.random() < 0.15
+
+        client = conectar_gemini()
+
+        respuesta = client.models.generate_content(
+            model="gemini-3-flash-preview",
+            config=types.GenerateContentConfig(
+                system_instruction = """
+                    Eres un asistente que responde a las preguntas de los usuarios de manera clara y consisa. Devuelve solamente  un json con la respuesta a la pregunta del usuario
+                """,
+                response_mime_type="application/json"
+            ),
+            contents=construir_prompt({
+                "num_prompt" : 3,
+                "post_id" : next_post_num,
+                "raw_json_id" : raw_json,
+                "username" : username,
+                "empresa_id" : empresa_id,
+                "plataforma" : plataforma,
+                "fecha_publicacion": fecha_publicacion,
+                "tipo_contenido" : tipo_contenido,
+                "patrocinado" : patrocinado,
+                "visualizaciones" : visualizaciones,
+                "alcance" : alcance,
+                "impresiones" : impresiones,
+                "likes_min" : likes_min,
+                "likes_max" : likes_max,
+                "source_api" : source_api,
+                "es_viral" : es_viral,
+            })
+        )
+        datos = json.loads(respuesta.text)
+        filas_post = datos.get("records", [])
+
+        return JsonResponse({"records": filas_post})
 
 def conectar_gemini():
     load_dotenv()
 
     return genai.Client(api_key = os.getenv("GEMINI_API_KEY"))
+
+def convertir_valor(val):
+    if pd.isna(val) or str(val).lower() == "nan":
+        return None
+    if isinstance(val, (np.bool_,)):
+        return bool(val)
+    if isinstance(val, np.integer):
+        return int(val)
+    if isinstance(val, np.floating):
+        return float(val)
+    return val
 
 
 def construir_prompt(json_data):
@@ -302,8 +384,7 @@ def construir_prompt(json_data):
             {seg_col}: redondear ({pct_col} * {seg} / 100) a entero
             empresa_id: "{eid}"
             perfil_id:  "{pid}"
-            created_at: "{snap}THH:MM:SS" con hora aleatoria entre 01:00 y 06:00,
-                        IGUAL en todos los registros de este snapshot
+            created_at: "{json_data['created_at']}" — usa exactamente este valor en todos los registros
             updated_at: null en todos (snapshot más reciente)
             
             REGLAS:
@@ -347,8 +428,8 @@ def construir_prompt(json_data):
                  SIEMPRE mayor que ALCANCE_SEMANAL
                - VISITAS_PERFIL: entre el 1% y el 8% de SEGUIDORES
             3. ACTIVO debe ser True.
-            4. CREATED_AT debe ser "{json_data["semana_snapshot"]}THH:MM:SS"
-               con hora aleatoria entre 01:00 y 06:00.
+            4. CREATED_AT debe tener el formato "YYYY-MM-DD HH:MM:SS.000" con fecha "{json_data["semana_snapshot"]}" y hora aleatoria entre 01:00 y 06:00.
+            Ejemplo: "{json_data["semana_snapshot"]} 03:42:15.000"
             5. UPDATED_AT debe ser null.
  
             Estructura requerida:
@@ -357,55 +438,78 @@ def construir_prompt(json_data):
             SEGUIDORES, ALCANCE_SEMANAL, IMPRESIONES_SEMANALES, VISITAS_PERFIL, CREATED_AT, UPDATED_AT
         '''
     elif json_data["num_prompt"] == 3: # raw_posts_interacciones
-        return f'''
-            Eres un generador de datos sintéticos para redes sociales. Devuelve ÚNICAMENTE un objeto JSON válido, sin explicaciones ni markdown.
-
-            IMPORTANTE: cada post se representa con exactamente 4 filas, una por tipo_interaccion (Like, Comentario, Compartir, Guardado). Todos los campos son idénticos entre las 4 filas salvo tipo_interaccion y cantidad_interaccion.
-
-            ━━━ SECCIÓN 1 — UPDATE ━━━
-            Modifica las métricas de este post existente. Los campos de identidad NO cambian
-            (post_id, raw_json_id, username, empresa_id, plataforma, fecha_publicacion, tipo_contenido).
-
-            Las 4 filas actuales del post:
-            {json.dumps(rows_to_update, ensure_ascii=False, default=str)}
-
-            Reglas del UPDATE:
-            - cantidad_interaccion de cada tipo varía ±5-15% respecto al valor original
-            - engagement_total = suma de los 4 nuevos valores de cantidad_interaccion
-            - Si impresiones era 0 en el original: corrígelo a un valor > 0 (simulando fix de tracking)
-            - updated_at: timestamp ISO posterior al created_at original, con fecha de hoy
-            - Devuelve las 4 filas actualizadas
-
-            ━━━ SECCIÓN 2 — INSERTs nuevos ━━━
-            Genera exactamente {n_inserts} posts nuevos ({n_inserts * 4} filas en total, 4 por post).
-            Usa estos pares username+empresa_id existentes:
-            {json.dumps(pares, ensure_ascii=False)}
-
-            Reglas de los INSERTs:
-            - post_id: desde P{next_post_num:06d} incrementando, mismo post_id en las 4 filas
-            - raw_json_id: UUID v4 único por post, igual en las 4 filas
-            - fecha_publicacion: entre "2025-01-06" y "2025-01-13"
-            - tipo_contenido con distribución: Reel 40%, Story 25%, Post estático 15%, Carrusel 12%, Video 8%
-            - Like: entre 10 y 35000 (1% de posts: entre 500000 y 2000000 — viral)
-            - Comentario: 0-20% del Like, Compartir: 0-12%, Guardado: 0-25%
-            - engagement_total = suma de los 4 tipos
-            - impresiones = 0 en el 3% de los posts (error de tracking) → visualizaciones también 0
-            - descripcion: null el 7% de las veces
-            - patrocinado: true el 15% de las veces, es_campana_bf: false
-            - plataforma con typos el 12% de las veces
-            - source_api: "api_v1" 40%, "api_v2" 35%, "manual_export" 25%
-            - created_at: fecha_publicacion + entre 1 y 6 horas, updated_at: null el 7% de las veces
-
-            ESQUEMA EXACTO (cada una de las filas):
-            {"post_id": string, "raw_json_id": string (UUID), "username": string,
-            "empresa_id": string, "plataforma": string, "fecha_publicacion": string (ISO),
-            "tipo_contenido": string, "descripcion": string|null, "patrocinado": boolean,
-            "es_campana_bf": boolean, "hashtags": string (2-6), 
-            "visualizaciones": integer, "alcance": integer, "impresiones": integer,
-            "tipo_interaccion": string, "cantidad_interaccion": integer,
-            "engagement_total": integer, "source_api": string,
-            "created_at": string (ISO), "updated_at": string|null}
-
-            Devuelve:
-            {"update": [ ...4 filas actualizadas... ], "inserts": [ ...{n_inserts * 4} filas nuevas... ]}
-        '''
+        pid = json_data["post_id"]
+        rjid = json_data["raw_json_id"]
+        uname = json_data["username"]
+        eid = json_data["empresa_id"]
+        plat = json_data["plataforma"]
+        fecha = json_data["fecha_publicacion"]
+        tc = json_data["tipo_contenido"]
+        pat = json_data["patrocinado"]
+        viz = json_data["visualizaciones"]
+        alc = json_data["alcance"]
+        imp = json_data["impresiones"]
+        lmin = json_data["likes_min"]
+        lmax = json_data["likes_max"]
+        src = json_data["source_api"]
+        viral = json_data["es_viral"]
+ 
+        return f"""
+            Genera exactamente 4 registros para la tabla raw_posts_interacciones.
+            Son las 4 filas del mismo post, una por tipo de interacción.
+            
+            CAMPOS IGUALES EN LAS 4 FILAS — copia exactamente estos valores:
+            post_id:          "{pid}"
+            raw_json_id:      "{rjid}"
+            username:         "{uname}"
+            empresa_id:       "{eid}"
+            plataforma:       "{plat}"
+            fecha_publicacion:"{fecha}"
+            tipo_contenido:   "{tc}"
+            patrocinado:      {str(pat).lower()}
+            es_campana_bf:    false
+            visualizaciones:  {viz}
+            alcance:          {alc}
+            impresiones:      {imp}{"  ← error de tracking, impresiones y visualizaciones = 0" if imp == 0 else ""}
+            source_api:       "{src}"
+            created_at: "{fecha} HH:MM:SS.000" con entre 1 y 6 horas sumadas a la fecha_publicacion
+            Ejemplo: "{fecha} 05:23:41.000"
+            updated_at:       null
+            {"⚠️ POST VIRAL — likes muy altos, es normal" if viral else ""}
+            
+            CAMPOS QUE CAMBIAN EN CADA FILA:
+            Genera una fila por cada tipo_interaccion en este orden:
+            
+            1. tipo_interaccion: "Like"
+                cantidad_interaccion: entero entre {lmin:,} y {lmax:,}
+            
+            2. tipo_interaccion: "Comentario"
+                cantidad_interaccion: entre 0% y 20% del valor de Like
+            
+            3. tipo_interaccion: "Compartir"
+                cantidad_interaccion: entre 0% y 12% del valor de Like
+            
+            4. tipo_interaccion: "Guardado"
+                cantidad_interaccion: entre 0% y 25% del valor de Like
+            
+            engagement_total: suma de las 4 cantidades (igual en las 4 filas)
+            
+            CAMPO LIBRE — genera tú:
+            descripcion: texto en inglés de 15 a 30 palabras
+            hashtags: entre 2 y 6 hashtags en español (ej: "#marketing #tendencias")
+            
+            ESQUEMA EXACTO DE CADA FILA:
+            {{
+            "post_id": "string", "raw_json_id": "string", "username": "string",
+            "empresa_id": "string", "plataforma": "string",
+            "fecha_publicacion": "string", "tipo_contenido": "string",
+            "descripcion": "string|null", "patrocinado": "boolean",
+            "es_campana_bf": "boolean", "hashtags": "string",
+            "visualizaciones": "integer", "alcance": "integer", "impresiones": "integer",
+            "tipo_interaccion": "string", "cantidad_interaccion": "integer",
+            "engagement_total": "integer", "source_api": "string",
+            "created_at": "string", "updated_at": null
+            }}
+            
+            Devuelve: {{"records": [ ...exactamente 4 objetos... ]}}
+        """

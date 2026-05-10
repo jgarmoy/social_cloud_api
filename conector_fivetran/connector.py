@@ -10,19 +10,14 @@ FECHA_SNAPSHOT_AUDIENCIA = "2025-01-05"
 FECHA_POST = "2025-01-01"
 
 # Schema
-def esquema(configuracion: dict):
+def schema(configuration: dict):
     return [
         {
             "table": "raw_perfiles_empresas",
             "primary_key": ["perfil_id", "semana_snapshot"]
         },
         {
-            "table": "raw_audiencia_demografica",
-            "primary_key": [
-                "perfil_id", "empresa_id", "snapshot_date", "report_date", "period",
-                "gender_segment", "audience_gender", "sexo",
-                "age_segment", "audience_age", "edad"
-            ]
+            "table": "raw_audiencia_demografica"
         },
         {
             "table": "raw_posts_interacciones",
@@ -40,8 +35,8 @@ def llamar_api(base_url: str, endpoint:str, payload: dict) -> dict:
 
 
 # Update
-def update(configuracion: dict, state:dict):
-    api_url = configuracion["api_base_url"]
+def update(configuration: dict, state: dict):
+    api_url = configuration["api_base_url"]
 
     perfiles_procesados = state.get("perfiles_procesados", [])
     log.info(f"Perfiles procesados previamente: {len(perfiles_procesados)}")
@@ -65,7 +60,7 @@ def update(configuracion: dict, state:dict):
     ctx = respuesta_perfiles["context"]
 
     op.upsert(table="raw_perfiles_empresas", data=nueva_fila)
-    log.info(f"Perfil upserted → {ctx['perfil_id']} / {nueva_fila['semana_snapshot']}")
+    log.info(f"Perfil upserted → {ctx['perfil_id']} / {nueva_fila['SEMANA_SNAPSHOT']}")
 
     fila_anterior = ctx["fila_anterior"]
     fila_anterior["UPDATED_AT"] = nueva_fila["CREATED_AT"]
@@ -82,7 +77,7 @@ def update(configuracion: dict, state:dict):
         api_url,
         "audiencia",
         {
-            "snapshot_date": FECHA_SNAPSHOT_AUDIENCIA,
+            "semana_snapshot": FECHA_SNAPSHOT_AUDIENCIA,
             "perfil_id": ctx["perfil_id"],
             "empresa_id": ctx["empresa_id"],
             "username": ctx["username"],
@@ -97,10 +92,10 @@ def update(configuracion: dict, state:dict):
 
     log.info(f"Audiencia upserted → {len(segmentos)} segmentos nuevos")
 
-    created_at_nuevo = segmentos[0]["created_at"]
+    created_at_nuevo = respuesta_audiencia["created_at_nuevo"]
     filas_anteriores = respuesta_audiencia["filas_anteriores"]
     for fila in filas_anteriores:
-        fila["updated_at"] = created_at_nuevo
+        fila["UPDATED_AT"] = created_at_nuevo 
         op.upsert(table = "raw_audiencia_demografica", data=fila)
 
     log.info(f"Snapshot anterior cerrado → {len(filas_anteriores)} filas con updated_at = {created_at_nuevo}")
@@ -111,7 +106,7 @@ def update(configuracion: dict, state:dict):
 
     log.info(f"Llamando a /post/ → fecha_publicacion: {FECHA_POST}")
 
-    respueta_post = llamar_api(
+    respuesta_post = llamar_api(
         api_url,
         "post",
         {
@@ -119,7 +114,8 @@ def update(configuracion: dict, state:dict):
             "perfil_id": ctx["perfil_id"],
             "empresa_id": ctx["empresa_id"],
             "username": ctx["username"],
-            "plataforma": ctx["plataforma"]
+            "plataforma": ctx["plataforma"],
+            "ultimo_post_id"   : state.get("ultimo_post_id", "P103861")
         }
     )
 
@@ -127,9 +123,10 @@ def update(configuracion: dict, state:dict):
     for fila in filas_post:
         op.upsert(table="raw_posts_interacciones", data=fila)
     
-    log.info(f"✓ Post upserted → {filas_post[0]['post_id']} ({len(filas_post)} filas)")
+    log.info(f"Post upserted → {filas_post[0]['post_id']} ({len(filas_post)} filas)")
     nuevo_state = {
-        "perfiles_procesados": perfiles_procesados + [ctx["perfil_id"]]
+        "perfiles_procesados": perfiles_procesados + [ctx["perfil_id"]],
+        "ultimo_post_id"     : filas_post[0]["post_id"]
     }
 
     op.checkpoint(state = nuevo_state)
@@ -138,9 +135,10 @@ def update(configuracion: dict, state:dict):
         f"{len(nuevo_state['perfiles_procesados'])} perfiles procesados en total"
     )
 
-connector = Connector(update = update, schema = esquema)
+connector = Connector(update = update, schema = schema)
 
 if __name__ == "__main__":
     connector.debug(
-        configuration={"api_base_url": "http://localhost:8000/social_cloud/api/v1/"}
+        configuration={"api_base_url": "http://localhost:8000/social_cloud/api/v1/"},
+        state={"perfiles_procesados": ["P00169", "P00124"], "ultimo_post_id": "P103863"}
     )

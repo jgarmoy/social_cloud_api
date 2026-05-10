@@ -19,3 +19,15 @@ Content-Type: application/json
   "plataforma": "Instagram",
   "seguidores": 15500
 }
+
+### Generar post con Gemini ✅
+POST http://localhost:8000/social_cloud/api/v1/post/
+Content-Type: application/json
+
+{
+  "fecha_publicacion": "2025-01-01",
+  "perfil_id": "P00152",
+  "empresa_id": "E0077",
+  "username": "@nadiapardo",
+  "plataforma": "TikTok"
+}
