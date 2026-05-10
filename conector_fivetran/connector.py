@@ -29,7 +29,7 @@ def schema(configuration: dict):
 def llamar_api(base_url: str, endpoint:str, payload: dict) -> dict:
     """Llama al endpoint pasado de la API y devuelve el JSON"""
     url = f"{base_url.rstrip('/')}/{endpoint.strip('/')}/"
-    respuesta = requests.post(url, json=payload, timeout=60)
+    respuesta = requests.post(url, json=payload, timeout=180)
     respuesta.raise_for_status()
     return respuesta.json()
 
@@ -139,6 +139,6 @@ connector = Connector(update = update, schema = schema)
 
 if __name__ == "__main__":
     connector.debug(
-        configuration={"api_base_url": "http://localhost:8000/social_cloud/api/v1/"},
+        configuration={"api_base_url": "https://social-cloud-api.onrender.com/social_cloud/api/v1"},
         state={"perfiles_procesados": ["P00169", "P00124"], "ultimo_post_id": "P103863"}
     )
