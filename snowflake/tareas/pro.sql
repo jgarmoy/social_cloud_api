@@ -1,0 +1,309 @@
+use warehouse wh_social_cloud;
+
+ALTER TABLE pro_social_cloud_bronze_db.SOCIAL_CLOUD_CONECTOR_PRO.RAW_POSTS_INTERACCIONES
+ADD COLUMN UPDATED_AT TIMESTAMP_NTZ(9) DEFAULT NULL;
+
+ALTER TABLE pro_social_cloud_bronze_db.SOCIAL_CLOUD_CONECTOR_PRO.RAW_POSTS_INTERACCIONES
+ADD COLUMN _FIVETRAN_ID VARCHAR(256) DEFAULT NULL;
+
+ALTER TABLE pro_social_cloud_bronze_db.SOCIAL_CLOUD_CONECTOR_PRO.RAW_POSTS_INTERACCIONES
+DROP COLUMN _FIVETRAN_ID;
+
+
+-- ============================================================
+-- TABLA 1 — RAW_PERFILES_EMPRESAS
+-- PK: (PERFIL_ID, SEMANA_SNAPSHOT)
+-- NOTA: SEMANA_SNAPSHOT es DATE en origen y VARCHAR en destino
+--       FECHA_CREACION_PERFIL es DATE en origen y VARCHAR en destino
+-- ============================================================
+CREATE OR REPLACE TASK pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.sync_perfiles
+    WAREHOUSE = wh_social_cloud
+    SCHEDULE  = 'USING CRON 30 19 * * * UTC'
+AS
+MERGE INTO pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.RAW_PERFILES_EMPRESAS AS target
+USING (
+    SELECT
+        s.PERFIL_ID,
+        TO_VARCHAR(s.SEMANA_SNAPSHOT, 'YYYY-MM-DD')   AS SEMANA_SNAPSHOT,
+        s.EMPRESA_ID,
+        s.EMPRESA_NOMBRE,
+        s.EMPRESA_CATEGORIA,
+        s.EMPRESA_PAIS,
+        s.EMPRESA_WEB,
+        s.EMPRESA_EMAIL,
+        s.USERNAME,
+        s.PLATAFORMA,
+        TO_VARCHAR(s.FECHA_CREACION_PERFIL, 'YYYY-MM-DD') AS FECHA_CREACION_PERFIL,
+        s.ACTIVO,
+        s.SEGUIDORES,
+        s.ALCANCE_SEMANAL,
+        s.IMPRESIONES_SEMANALES,
+        s.VISITAS_PERFIL,
+        s.CREATED_AT,
+        s.UPDATED_AT,
+        s._FIVETRAN_SYNCED,
+        COALESCE(m.MAX_L, 0) + ROW_NUMBER() OVER (ORDER BY s.PERFIL_ID, s.SEMANA_SNAPSHOT) AS CALC_LINE
+    FROM pro_social_cloud_bronze_db.SOCIAL_CLOUD_CONECTOR_PRO.RAW_PERFILES_EMPRESAS AS s
+    CROSS JOIN (
+        SELECT MAX(_LINE) AS MAX_L 
+        FROM pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.RAW_PERFILES_EMPRESAS
+    ) AS m
+    WHERE s._FIVETRAN_SYNCED >= DATEADD(hour, -6, CURRENT_TIMESTAMP())
+    AND (s._FIVETRAN_DELETED IS NULL OR s._FIVETRAN_DELETED = FALSE)
+) AS source
+ON  target.PERFIL_ID = source.PERFIL_ID
+AND target.SEMANA_SNAPSHOT = source.SEMANA_SNAPSHOT
+
+WHEN MATCHED THEN UPDATE SET
+    target.UPDATED_AT = source.UPDATED_AT
+
+WHEN NOT MATCHED THEN INSERT (
+    PERFIL_ID, SEMANA_SNAPSHOT, EMPRESA_ID, EMPRESA_NOMBRE,
+    EMPRESA_CATEGORIA, EMPRESA_PAIS, EMPRESA_WEB, EMPRESA_EMAIL,
+    USERNAME, PLATAFORMA, FECHA_CREACION_PERFIL, ACTIVO,
+    SEGUIDORES, ALCANCE_SEMANAL, IMPRESIONES_SEMANALES,
+    VISITAS_PERFIL, CREATED_AT, UPDATED_AT, _FIVETRAN_SYNCED, _LINE
+)
+VALUES (
+    source.PERFIL_ID, source.SEMANA_SNAPSHOT, source.EMPRESA_ID, source.EMPRESA_NOMBRE,
+    source.EMPRESA_CATEGORIA, source.EMPRESA_PAIS, source.EMPRESA_WEB, source.EMPRESA_EMAIL,
+    source.USERNAME, source.PLATAFORMA, source.FECHA_CREACION_PERFIL, source.ACTIVO,
+    source.SEGUIDORES, source.ALCANCE_SEMANAL, source.IMPRESIONES_SEMANALES,
+    source.VISITAS_PERFIL, source.CREATED_AT, source.UPDATED_AT, source._FIVETRAN_SYNCED,
+    source.CALC_LINE
+);
+
+-- RECUERDA ACTIVAR LA TAREA DESPUÉS DE RECREARLA
+ALTER TASK pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.sync_perfiles RESUME;
+
+-- Comprobar información tabla
+DESC TABLE pro_social_cloud_bronze_db.SOCIAL_CLOUD_CONECTOR_PRO.raw_perfiles_empresas;
+
+
+-- Comprobar resultados
+SELECT *
+FROM pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.raw_perfiles_empresas
+-- WHERE _FIVETRAN_SYNCED::DATE > '2026-05-09'
+ORDER BY _FIVETRAN_SYNCED DESC;
+
+
+-- ============================================================
+-- TABLA 2 — RAW_POSTS_INTERACCIONES
+-- PK: (POST_ID, TIPO_INTERACCION)
+-- NOTA: FECHA_PUBLICACION es DATE en origen y TIMESTAMP en destino
+-- ============================================================
+CREATE OR REPLACE TASK pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.sync_posts
+    WAREHOUSE = wh_social_cloud
+    SCHEDULE  = 'USING CRON 35 19 * * * UTC'
+AS
+MERGE INTO pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.RAW_POSTS_INTERACCIONES AS target
+USING (
+    SELECT
+        s.POST_ID,
+        s.TIPO_INTERACCION,
+        s.RAW_JSON_ID,
+        s.USERNAME,
+        s.EMPRESA_ID,
+        s.PLATAFORMA,
+        s.FECHA_PUBLICACION::TIMESTAMP_NTZ  AS FECHA_PUBLICACION, 
+        s.TIPO_CONTENIDO,
+        s.DESCRIPCION,
+        s.PATROCINADO,
+        s.ES_CAMPANA_BF,
+        s.HASHTAGS,
+        s.VISUALIZACIONES,
+        s.ALCANCE,
+        s.IMPRESIONES,
+        s.CANTIDAD_INTERACCION,
+        s.ENGAGEMENT_TOTAL,
+        s.SOURCE_API,
+        s.CREATED_AT,
+        s.UPDATED_AT,
+        s._FIVETRAN_SYNCED,
+        COALESCE(m.MAX_L, 0) + ROW_NUMBER() OVER (ORDER BY s.POST_ID, s.TIPO_INTERACCION) AS CALC_LINE
+    FROM pro_social_cloud_bronze_db.SOCIAL_CLOUD_CONECTOR_PRO.RAW_POSTS_INTERACCIONES AS s
+    CROSS JOIN (
+        SELECT MAX(_LINE) AS MAX_L 
+        FROM pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.RAW_POSTS_INTERACCIONES
+    ) AS m
+    WHERE s._FIVETRAN_SYNCED >= DATEADD(hour, -6, CURRENT_TIMESTAMP())
+    AND (s._FIVETRAN_DELETED IS NULL OR s._FIVETRAN_DELETED = FALSE)
+) AS source
+ON  target.POST_ID = source.POST_ID
+AND target.TIPO_INTERACCION = source.TIPO_INTERACCION
+
+WHEN MATCHED THEN UPDATE SET
+    target.UPDATED_AT = source.UPDATED_AT
+
+WHEN NOT MATCHED THEN INSERT (
+    POST_ID, TIPO_INTERACCION, RAW_JSON_ID, USERNAME, EMPRESA_ID,
+    PLATAFORMA, FECHA_PUBLICACION, TIPO_CONTENIDO, DESCRIPCION,
+    PATROCINADO, ES_CAMPANA_BF, HASHTAGS, VISUALIZACIONES, ALCANCE,
+    IMPRESIONES, CANTIDAD_INTERACCION, ENGAGEMENT_TOTAL,
+    SOURCE_API, CREATED_AT, UPDATED_AT, _FIVETRAN_SYNCED, _LINE
+)
+VALUES (
+    source.POST_ID, source.TIPO_INTERACCION, source.RAW_JSON_ID, source.USERNAME, source.EMPRESA_ID,
+    source.PLATAFORMA, source.FECHA_PUBLICACION, source.TIPO_CONTENIDO, source.DESCRIPCION,
+    source.PATROCINADO, source.ES_CAMPANA_BF, source.HASHTAGS, source.VISUALIZACIONES, source.ALCANCE,
+    source.IMPRESIONES, source.CANTIDAD_INTERACCION, source.ENGAGEMENT_TOTAL,
+    source.SOURCE_API, source.CREATED_AT, source.UPDATED_AT, source._FIVETRAN_SYNCED,
+    source.CALC_LINE
+);
+
+-- No olvides reactivar la tarea si la acabas de recrear
+ALTER TASK pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.sync_posts RESUME;
+
+-- Comprobar resultados
+SELECT *
+FROM pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.RAW_PERFILES_EMPRESAS
+WHERE _FIVETRAN_SYNCED::DATE > '2026-05-09'
+ORDER BY _FIVETRAN_SYNCED DESC;
+
+-- Comprobar si han salido bien los sync_perfiles
+SELECT *
+FROM TABLE(
+    pro_social_cloud_bronze_db.INFORMATION_SCHEMA.TASK_HISTORY(
+        RESULT_LIMIT => 20
+    )
+)
+WHERE NAME = 'SYNC_POSTS'
+ORDER BY SCHEDULED_TIME DESC;
+SHOW TABLES IN SCHEMA pro_social_cloud_bronze_db.SOCIAL_CLOUD_CONECTOR_PRO;
+
+
+-- ============================================================
+-- TABLA 3 — RAW_AUDIENCIA_DEMOGRAFICA
+-- Sin PK natural → INSERT solo filas nuevas usando _FIVETRAN_ID
+-- NOTA: el schema nuevo solo tiene columnas TikTok (15 columnas)
+--       Las columnas de Instagram y YouTube llegan a null
+--       SNAPSHOT_DATE es TIMESTAMP_NTZ en origen y VARCHAR en destino
+-- ============================================================
+CREATE OR REPLACE PROCEDURE pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.sp_sync_audiencia()
+RETURNS STRING
+LANGUAGE SQL
+AS
+$$
+BEGIN
+
+    INSERT INTO pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.RAW_AUDIENCIA_DEMOGRAFICA (
+        TK_HANDLE, TK_PLATFORM, SNAPSHOT_DATE,
+        GENDER_SEGMENT, AGE_SEGMENT, COUNTRY,
+        AUDIENCE_SHARE_PCT, SEG_FOLLOWERS,
+        IG_USERNAME, IG_PLATFORM, REPORT_DATE,
+        AUDIENCE_GENDER, AUDIENCE_AGE, AUDIENCE_COUNTRY,
+        PCT_AUDIENCE, FOLLOWER_COUNT_SEG,
+        YT_HANDLE, NETWORK, PERIOD,
+        SEXO, EDAD, PAIS_AUDIENCIA,
+        PORCENTAJE, N_SEGUIDORES_SEG,
+        EMPRESA_ID, PERFIL_ID,
+        CREATED_AT, UPDATED_AT, _FIVETRAN_SYNCED, _LINE
+    )
+    WITH src_dedup AS (
+        SELECT
+            TK_HANDLE, TK_PLATFORM,
+            SNAPSHOT_DATE::DATE              AS SNAPSHOT_DATE,
+            GENDER_SEGMENT, AGE_SEGMENT, COUNTRY,
+            AUDIENCE_SHARE_PCT,
+            SEG_FOLLOWERS::NUMBER(38,0)      AS SEG_FOLLOWERS,
+            IG_USERNAME, IG_PLATFORM,
+            REPORT_DATE::DATE                AS REPORT_DATE,
+            AUDIENCE_GENDER, AUDIENCE_AGE, AUDIENCE_COUNTRY,
+            PCT_AUDIENCE,
+            FOLLOWER_COUNT_SEG::NUMBER(38,0) AS FOLLOWER_COUNT_SEG,
+            YT_HANDLE, NETWORK,
+            PERIOD::DATE                     AS PERIOD,
+            SEXO, EDAD, PAIS_AUDIENCIA,
+            PORCENTAJE,
+            N_SEGUIDORES_SEG::NUMBER(38,0)   AS N_SEGUIDORES_SEG,
+            EMPRESA_ID, PERFIL_ID,
+            CREATED_AT, UPDATED_AT, _FIVETRAN_SYNCED
+        FROM pro_social_cloud_bronze_db.SOCIAL_CLOUD_CONECTOR_PRO.RAW_AUDIENCIA_DEMOGRAFICA
+        WHERE _FIVETRAN_SYNCED >= DATEADD('hour', -6, CURRENT_TIMESTAMP())
+          AND (_FIVETRAN_DELETED IS NULL OR _FIVETRAN_DELETED = FALSE)
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY
+                COALESCE(TK_HANDLE, ''), COALESCE(IG_USERNAME, ''), COALESCE(YT_HANDLE, ''),
+                COALESCE(SNAPSHOT_DATE::DATE, '1900-01-01'),
+                COALESCE(REPORT_DATE::DATE, '1900-01-01'),
+                COALESCE(PERIOD::DATE, '1900-01-01'),
+                COALESCE(GENDER_SEGMENT, ''), COALESCE(AUDIENCE_GENDER, ''), COALESCE(SEXO, ''),
+                COALESCE(AGE_SEGMENT, ''), COALESCE(AUDIENCE_AGE, ''), COALESCE(EDAD, '')
+            ORDER BY _FIVETRAN_SYNCED DESC
+        ) = 1
+    ),
+    max_line AS (
+        SELECT COALESCE(MAX(_LINE), 0) AS MAX_L
+        FROM pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.RAW_AUDIENCIA_DEMOGRAFICA
+    )
+    SELECT
+        s.TK_HANDLE, s.TK_PLATFORM, s.SNAPSHOT_DATE,
+        s.GENDER_SEGMENT, s.AGE_SEGMENT, s.COUNTRY,
+        s.AUDIENCE_SHARE_PCT, s.SEG_FOLLOWERS,
+        s.IG_USERNAME, s.IG_PLATFORM, s.REPORT_DATE,
+        s.AUDIENCE_GENDER, s.AUDIENCE_AGE, s.AUDIENCE_COUNTRY,
+        s.PCT_AUDIENCE, s.FOLLOWER_COUNT_SEG,
+        s.YT_HANDLE, s.NETWORK, s.PERIOD,
+        s.SEXO, s.EDAD, s.PAIS_AUDIENCIA,
+        s.PORCENTAJE, s.N_SEGUIDORES_SEG,
+        s.EMPRESA_ID, s.PERFIL_ID,
+        s.CREATED_AT, s.UPDATED_AT, s._FIVETRAN_SYNCED,
+        m.MAX_L + ROW_NUMBER() OVER (ORDER BY s._FIVETRAN_SYNCED ASC) AS _LINE
+    FROM src_dedup s
+    CROSS JOIN max_line m
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.RAW_AUDIENCIA_DEMOGRAFICA tgt
+        WHERE
+            COALESCE(tgt.TK_HANDLE, '')       = COALESCE(s.TK_HANDLE, '')
+            AND COALESCE(tgt.IG_USERNAME, '')  = COALESCE(s.IG_USERNAME, '')
+            AND COALESCE(tgt.YT_HANDLE, '')    = COALESCE(s.YT_HANDLE, '')
+            AND COALESCE(tgt.GENDER_SEGMENT, '') = COALESCE(s.GENDER_SEGMENT, '')
+            AND COALESCE(tgt.AUDIENCE_GENDER, '') = COALESCE(s.AUDIENCE_GENDER, '')
+            AND COALESCE(tgt.SEXO, '')         = COALESCE(s.SEXO, '')
+            AND COALESCE(tgt.AGE_SEGMENT, '')  = COALESCE(s.AGE_SEGMENT, '')
+            AND COALESCE(tgt.AUDIENCE_AGE, '') = COALESCE(s.AUDIENCE_AGE, '')
+            AND COALESCE(tgt.EDAD, '')         = COALESCE(s.EDAD, '')
+            AND COALESCE(tgt.SNAPSHOT_DATE, '1900-01-01') = COALESCE(s.SNAPSHOT_DATE, '1900-01-01')
+            AND COALESCE(tgt.REPORT_DATE, '1900-01-01')   = COALESCE(s.REPORT_DATE, '1900-01-01')
+            AND COALESCE(tgt.PERIOD, '1900-01-01')        = COALESCE(s.PERIOD, '1900-01-01')
+    );
+
+    UPDATE pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.RAW_AUDIENCIA_DEMOGRAFICA tgt
+    SET tgt.UPDATED_AT = src_nuevo.CREATED_AT
+    FROM (
+        SELECT DISTINCT
+            PERFIL_ID,
+            COALESCE(SNAPSHOT_DATE, REPORT_DATE, PERIOD) AS nueva_fecha,
+            CREATED_AT
+        FROM pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.RAW_AUDIENCIA_DEMOGRAFICA
+        WHERE _FIVETRAN_SYNCED >= DATEADD('hour', -6, CURRENT_TIMESTAMP())
+          AND UPDATED_AT IS NULL
+    ) src_nuevo
+    WHERE tgt.PERFIL_ID = src_nuevo.PERFIL_ID
+      AND COALESCE(tgt.SNAPSHOT_DATE, tgt.REPORT_DATE, tgt.PERIOD) < src_nuevo.nueva_fecha
+      AND tgt.UPDATED_AT IS NULL;
+
+    RETURN 'OK';
+END;
+$$;
+
+CREATE OR REPLACE TASK pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.sync_audiencia
+    WAREHOUSE = wh_social_cloud
+    SCHEDULE  = 'USING CRON 40 19 * * * UTC'
+AS
+CALL pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.sp_sync_audiencia();
+
+ALTER TASK pro_social_cloud_bronze_db.SOCIAL_CLOUD_SCHEMA.sync_audiencia RESUME;
+
+-- Ajuste
+ALTER TABLE pro_social_cloud_bronze_db.SOCIAL_CLOUD_CONECTOR_PRO.RAW_AUDIENCIA_DEMOGRAFICA 
+ADD 
+    IG_USERNAME VARCHAR(256),
+    IG_PLATFORM VARCHAR(256),
+    REPORT_DATE TIMESTAMP_NTZ(9),
+    AUDIENCE_GENDER VARCHAR(256),
+    AUDIENCE_AGE VARCHAR(256),
+    AUDIENCE_COUNTRY VARCHAR(256),
+    PCT_AUDIENCE FLOAT,
+    FOLLOWER_COUNT_SEG FLOAT;
